@@ -20,8 +20,10 @@ def run_ccf_df(spark: SparkSession, current_df: DataFrame, iterate_fn, max_itera
     prev_persisted_df = None
 
     total_time = 0.0 
+    n_iters = 0
 
     for iteration in range(1, max_iterations + 1):
+        n_iters += 1
         t0 = time.perf_counter() 
 
         deduped_with_flags = (
@@ -64,7 +66,7 @@ def run_ccf_df(spark: SparkSession, current_df: DataFrame, iterate_fn, max_itera
         prev_persisted_df.unpersist()
         
     #return component_map, total_time
-    return current_df, total_time
+    return current_df, total_time, n_iters
 
 
 def _build_component_map_df(pairs_df: DataFrame) -> dict:

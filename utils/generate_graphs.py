@@ -1,5 +1,9 @@
 import os
 import random
+import argparse
+import urllib.request
+import gzip
+import yaml
 
 def random_graph(n: int, m: int, seed: int = 42) -> list:
     edge_rng = random.Random(seed)
@@ -100,66 +104,207 @@ def social_community_graph(n: int, k: int, m_internal: int, m_external: int, see
             
     return list(edge_set.union(bridge_edges))
 
-def get_filename(gtype, nodes, folder="data"):
-    return f"{folder}/{gtype}_{nodes}.txt"
+def diameter_graph(n: int, m: int, d: int, seed: int = 42) -> list:
+    """
+    Fast O(N+M) generator for a random connected graph with exactly n nodes, m edges, and diameter d.
+    Uses a 'Layered Band' topology to ensure maximum randomness without O(N^2) checks.
+    """
+    if d >= n:
+        raise ValueError(f"Diameter {d} must be strictly less than the number of nodes {n}.")
+    if m < n - 1:
+        raise ValueError(f"Number of edges {m} must be at least n - 1 for the graph to be connected.")
 
-def save_graph(gtype, nodes, edges, comp, edge_list, folder="data"):
-    os.makedirs(folder, exist_ok=True)
-    filename = get_filename(gtype, nodes, folder)
+    if d == 1:
+        return random_graph(n, min(m, n * (n - 1) // 2), seed)
+
+    edge_rng = random.Random(seed)
+    edges = set()
     
-    with open(filename, "w") as f:
+    # Track which nodes belong to which coordinate layer
+    layers = {i: [] for i in range(d + 1)}
+    node_to_layer = {}
+
+    # 1. The Backbone
+    for i in range(d + 1):
+        layers[i].append(i)
+        node_to_layer[i] = i
+        if i > 0:
+            edges.add((i - 1, i))
+
+    # 2. Distribute remaining nodes randomly across internal layers
+    for v in range(d + 1, n):
+        L = edge_rng.randint(1, d - 1)
+        layers[L].append(v)
+        node_to_layer[v] = L
+        # Connect to the backbone node of that layer to guarantee connectivity
+        # distance to backbone is exactly 1, preserving max diameter mathematically.
+        edges.add((L, v)) 
+
+    # 3. Fast Random Edge Addition (Direct Sampling)
+    nodes_list = list(range(n))
+    attempts = 0
+    max_attempts = (m - len(edges)) * 10 # Safety valve against infinite loops
+    
+    while len(edges) < m and attempts < max_attempts:
+        attempts += 1
+        
+        # Pick a random source node
+        u = edge_rng.choice(nodes_list)
+        L_u = node_to_layer[u]
+        
+        # Pick a random valid target layer (L-1, L, or L+1)
+        valid_target_layers = [L_u]
+        if L_u > 0: valid_target_layers.append(L_u - 1)
+        if L_u < d: valid_target_layers.append(L_u + 1)
+        
+        L_v = edge_rng.choice(valid_target_layers)
+        
+        # Pick a random node in that target layer
+        v = edge_rng.choice(layers[L_v])
+        
+        if u != v:
+            edge = (min(u, v), max(u, v))
+            if edge not in edges:
+                edges.add(edge)
+                attempts = 0 # Reset safety valve on success
+
+    if len(edges) < m:
+        print(f"Warning: Reached local maximum density for this topology. Stopped at {len(edges)} edges.")
+        
+    return list(edges)
+
+def get_filename(gtype, folder="data", **kwargs):
+    parts = [gtype]
+    
+    # Sort keys to ensure consistent naming, but force 'n' to be the first parameter
+    keys = list(kwargs.keys())
+    if 'n' in keys:
+        keys.remove('n')
+        keys = ['n'] + sorted(keys)
+    else:
+        keys = sorted(keys)
+        
+    for k in keys:
+        parts.append(f"{k}{kwargs[k]}")
+        
+    return os.path.join(folder, "_".join(parts) + ".txt")
+
+def save_graph(filepath, gtype, nodes, edges, comp, edge_list, diameter=None):
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    
+    with open(filepath, "w") as f:
         f.write(f"# graph_type: {gtype}\n")
         f.write(f"# n_nodes: {nodes}\n")
         f.write(f"# n_edges: {edges}\n")
         f.write(f"# n_components: {comp}\n")
         
+        if diameter is not None:
+            f.write(f"# diameter: {diameter}\n")
+            
         for u, v in edge_list:
             f.write(f"{u} {v}\n")
             
-    print(f"Saved: {filename} ({edges} edges)")
+    print(f"Saved: {filepath} ({edges} edges)")
 
-def main():
-    print("Generating benchmark graphs...")
-    folder = "data"
-    os.makedirs(folder, exist_ok=True)
+def fetch_web_google_graph(folder="data"):
+    url = "https://snap.stanford.edu/data/web-Google.txt.gz"
+    gz_path = os.path.join(folder, "web-Google.txt.gz")
     
-    # Star Graphs
-    for n in [10000, 100000, 1000000]:
-        if not os.path.exists(get_filename("star", n, folder)):
-            save_graph("star", n, n-1, 1, star_graph(n), folder)
-        else:
-            print(f"Skipped: {get_filename('star', n, folder)} already exists.")
+    expected_nodes = 875713 
+    final_txt_path = get_filename("web_google", folder, n=expected_nodes)
+
+    if os.path.exists(final_txt_path):
+        print(f"Skipped: {final_txt_path} already exists.")
+        return
+
+    os.makedirs(folder, exist_ok=True)
+    print(f"Downloading {url} (this might take a moment)...")
+    urllib.request.urlretrieve(url, gz_path)
+
+    print("Extracting and parsing graph...")
+    edges = []
+    unique_nodes = set()
+    
+    with gzip.open(gz_path, 'rt') as f:
+        for line in f:
+            if not line.startswith('#'):
+                u, v = map(int, line.strip().split())
+                edges.append((u, v))
+                unique_nodes.add(u)
+                unique_nodes.add(v)
+
+    n_nodes = len(unique_nodes)
+    n_edges = len(edges)
+    save_graph(final_txt_path, "web_google", n_nodes, n_edges, 4336, edges)
+    os.remove(gz_path)
+
+
+# --- Dispatcher ---
+
+def generate_from_config(config_path):
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    folder = os.path.join("data", config.get("data_path", "bench_cases"))
+    graphs_config = config.get("graphs", {})
+
+    print(f"Generating benchmark graphs into: {folder} ...\n")
+
+    for gtype, params in graphs_config.items():
+        if gtype == "web_google":
+            fetch_web_google_graph(folder)
+            continue
+            
+        if not params:
+            continue
+
+        keys = list(params.keys())
         
-    # Chain Graphs
-    for n in [10, 100, 1000]:
-        if not os.path.exists(get_filename("chain", n, folder)):
-            save_graph("chain", n, n-1, 1, chain_graph(n), folder)
-        else:
-            print(f"Skipped: {get_filename('chain', n, folder)} already exists.")
+        for k in keys:
+            if not isinstance(params[k], list):
+                params[k] = [params[k]]
+                
+        num_runs = len(params[keys[0]])
 
-    # Multi-Component Graphs
-    for n, k, m in [(100000, 10, 500000), (500000, 10, 2500000), (1000000, 10, 5000000)]:
-        if not os.path.exists(get_filename("multi_comp", n, folder)):
-            edges = multi_component_graph(n, k, m)
-            save_graph("multi_comp", n, len(edges), k, edges, folder)
-        else:
-            print(f"Skipped: {get_filename('multi_comp', n, folder)} already exists.")
+        for i in range(num_runs):
+            # Extract the arguments for this specific run
+            kwargs = {k: params[k][i] for k in keys}
+            n = kwargs["n"]
+            
+            # Dynamically generate the filename using all parameters
+            filepath = get_filename(gtype, folder, **kwargs)
+            
+            if os.path.exists(filepath):
+                print(f"Skipped: {filepath} already exists.")
+                continue
 
-    # Scale-free Graphs
-    for n in [100000, 500000, 1000000]:
-        if not os.path.exists(get_filename("scale_free", n, folder)):
-            edges = scale_free_graph(n, m0=3)
-            save_graph("scale_free", n, len(edges), 1, edges, folder)
-        else:
-            print(f"Skipped: {get_filename('scale_free', n, folder)} already exists.")
-
-    # Social network
-    for n, k, m_in, m_out in [(100000, 10, 500000, 1000), (500000, 10, 2500000, 5000), (1000000, 10, 5000000, 10000)]:
-        if not os.path.exists(get_filename("social_net", n, folder)):
-            edges = social_community_graph(n, k, m_in, m_out)
-            save_graph("social_net", n, len(edges), 1, edges, folder)
-        else:
-            print(f"Skipped: {get_filename('social_net', n, folder)} already exists.")
+            print(f"Generating {gtype} graph (n={n})...")
+            
+            if gtype == "star":
+                save_graph(filepath, gtype, n, n-1, 1, star_graph(n))
+            elif gtype == "chain":
+                save_graph(filepath, gtype, n, n-1, 1, chain_graph(n))
+            elif gtype == "multi_comp":
+                edges = multi_component_graph(n, kwargs["k"], kwargs["m"])
+                save_graph(filepath, gtype, n, len(edges), kwargs["k"], edges)
+            elif gtype == "scale_free":
+                edges = scale_free_graph(n, kwargs["m0"])
+                save_graph(filepath, gtype, n, len(edges), 1, edges)
+            elif gtype == "social_net":
+                edges = social_community_graph(n, kwargs["k"], kwargs["m_internal"], kwargs["m_external"])
+                save_graph(filepath, gtype, n, len(edges), 1, edges)
+            elif gtype == "fixed_diameter":
+                edges = diameter_graph(n, kwargs["m"], kwargs["d"])
+                save_graph(filepath, gtype, n, len(edges), 1, edges, diameter=kwargs["d"])
+            else:
+                print(f"Warning: Unknown graph type '{gtype}'")
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Graph Generator Pipeline")
+    parser.add_argument("--config", "-c", type=str, default="topologies.yaml", help="Path to YAML configuration file")
+    args = parser.parse_args()
+    config_path = os.path.join("configs", args.config)
+    if os.path.exists(config_path):
+        generate_from_config(config_path)
+    else:
+        print(f"Error: Configuration file '{config_path}' not found.")

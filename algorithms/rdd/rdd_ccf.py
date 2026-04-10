@@ -16,9 +16,11 @@ def run_ccf_rdd(spark: SparkSession, current_rdd: RDD, iterate_fn, max_iteration
 
     sc = spark.sparkContext
 
+    n_iters = 0
     total_time = 0.0 
 
     for iteration in range(1, max_iterations + 1):
+        n_iters += 1
         t0 = time.perf_counter() 
         
         new_pair_acc = sc.accumulator(0)
@@ -44,17 +46,21 @@ def run_ccf_rdd(spark: SparkSession, current_rdd: RDD, iterate_fn, max_iteration
         if iteration > 1:
             previous_rdd.unpersist()
             
-    return current_rdd, total_time
+    return current_rdd, total_time, n_iters
 
 
 
 def run_ccf_v3_no_build(spark: SparkSession, current_rdd: RDD, max_iterations: int = 100) -> tuple[RDD, float]:
 
     sc = spark.sparkContext
+
+    n_iters = 0
     
     total_compute_time = 0.0
 
     for iteration in range(1, max_iterations + 1):
+
+        n_iters += 1
 
         sorted_rdd = build_secondary_sorted_rdd(current_rdd).persist(StorageLevel.MEMORY_AND_DISK)
 
@@ -89,7 +95,7 @@ def run_ccf_v3_no_build(spark: SparkSession, current_rdd: RDD, max_iterations: i
         if iteration > 1:
             previous_rdd.unpersist()
             
-    return current_rdd, total_compute_time
+    return current_rdd, total_compute_time, n_iters
 
 def _build_component_map(pairs: list) -> dict:
     component_map = {}
