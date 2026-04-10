@@ -14,7 +14,7 @@ The project is organized into 6 main modules :
 
 # Setting up Spark
 
-If, like some of us, your virtual environment doesn't automatically detect your environment variables like JAVA_HOME and SPARK_HOME, you will need to set them manually inside the .env file. 
+If, like some of us, your virtual environment doesn't automatically detect your environment variables like JAVA_HOME and SPARK_HOME, you will need to set them manually inside a .env file. Create a new .env file, and write the required environment variables to override. You can use the example given in .env.example.
 
 # PySpark
 
