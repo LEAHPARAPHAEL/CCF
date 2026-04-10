@@ -2,8 +2,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import os
 
-py_path = os.path.join("results", "csv", "benchmark_pyspark.csv")
-sc_path = os.path.join("results", "csv", "benchmark_scala.csv")
+py_path = os.path.join("results", "csv", "full_benchmark_pyspark.csv")
+sc_path = os.path.join("results", "csv", "full_benchmark_scala.csv")
 
 df_py = pd.read_csv(py_path)
 df_sc = pd.read_csv(sc_path)
@@ -11,7 +11,7 @@ df_sc = pd.read_csv(sc_path)
 graph_types = pd.concat([df_py['graph_type'], df_sc['graph_type']]).unique()
 print("Generating plots...")
 for g_type in graph_types:
-    plt.figure(figsize=(8, 5))
+    plt.figure(figsize=(6, 4))
     
     subset_g_py = df_py[df_py['graph_type'] == g_type].sort_values(by='n_nodes')
     subset_g_sc = df_sc[df_sc['graph_type'] == g_type].sort_values(by='n_nodes')
@@ -40,7 +40,7 @@ for g_type in graph_types:
     plt.xlabel('Number of Nodes ($n$)')
     plt.ylabel('Mean Wall Time (s)')
     
-    plt.legend(title='Algorithm (Engine)', bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.legend(title='Algorithm (Engine)', bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small', title_fontsize='small')
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.tight_layout()
     
