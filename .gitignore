@@ -211,3 +211,4 @@ __marimo__/
 *.txt
 !*scala.txt
 !*web-Google.txt
+!requirements.txt

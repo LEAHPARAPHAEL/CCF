@@ -14,7 +14,7 @@ The project is organized into 6 main modules :
 
 # Setting up Spark
 
-If, like some of us, your virtual environment doesn't automatically detect your environment variables like JAVA_HOME and SPARK_HOME, you will need to set them manually inside a .env file. Create a new .env file, and write the required environment variables to override. You can use the example given in .env.example.
+If, like some of us, your virtual environment doesn't automatically detect your environment variables like JAVA_HOME and SPARK_HOME, you will need to set them manually inside a .env file. Create a new .env file at the root of the project, and write the required environment variables to override. You can use the example given in .env.example.
 
 # PySpark
 
@@ -34,7 +34,7 @@ To run our Scala code, you have two options :
 # Recommended setup
 
 Since it may be hard to deal with various operating systems, and different versions of python, spark and java, we propose an easy way to run both the PySpark and Scala versions.
-Our recommended setup, and the one we used for our experiments, is the following : we use the Onyxia sspcloud datalab, with the jupyter pyspark service. We use a driver memory of 12GB, 120GB of RAM, 30 cores and initialize Spark with 64 shuffle partitions. You will be able to run the pyspark and scala benchmark from this terminal easily.
+Our recommended setup, and the one used for our experiments, is the following : we use Onyxia sspcloud datalab, with the jupyter pyspark service. We use a driver memory of 12GB, 120GB of RAM, 30 cores and initialize Spark with 64 shuffle partitions. From JupyterLab, you can import the required files easily, and run the PySpark and Scala codes from the terminal. 
 
 
 
