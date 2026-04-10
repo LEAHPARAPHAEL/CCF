@@ -13,12 +13,14 @@ from algorithms.rdd import rdd_v1, rdd_v3
 from algorithms.df.df_ccf import run_ccf_df
 from algorithms.df import df_v1, df_v3
 import argparse
+from utils.spark_builder import build_spark
+import utils.generate_graphs as gg
+
 
 import glob
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
-
 
 class GraphDef:
     def __init__(self, name, nodes, edges, comp, filepath):
@@ -67,6 +69,8 @@ ALGORITHMS = {
     "rdd_v3_exec": lambda spark, rdd, df: run_ccf_v3_no_build(spark, rdd)
 }
 
+gg.main()
+
 
 def execute_with_timeout(spark, job_group_id, func, *args, timeout_sec=100):
     
@@ -91,7 +95,8 @@ def execute_with_timeout(spark, job_group_id, func, *args, timeout_sec=100):
             raise
 
 def run_benchmark(args):
-    spark = SparkSession.builder.appName("CCF-Benchmark-Python").getOrCreate()
+    spark = build_spark()
+
     sc = spark.sparkContext
     
     RUNS = 3
@@ -100,7 +105,7 @@ def run_benchmark(args):
     
     data_files = glob.glob("data/*.txt")
     graphs = [parse_metadata(f) for f in data_files]
-    algos = ["rdd_v1", "rdd_v2", "rdd_v3", "df_v1", "df_v3"] 
+    algos = ["rdd_v1", "rdd_v3", "rdd_v3_exec", "df_v1", "df_v3"] 
 
     headers = [
         "algo", "graph_type", "n_nodes", "n_edges", "n_components",

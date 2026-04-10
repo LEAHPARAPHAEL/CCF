@@ -67,63 +67,6 @@ def run_ccf_df(spark: SparkSession, current_df: DataFrame, iterate_fn, max_itera
     return current_df, total_time
 
 
-
-
-'''
-def run_ccf_df(spark: SparkSession, edge_list: list, iterate_fn, max_iterations: int = 100) -> dict:
-    current_df = spark.createDataFrame(edge_list, ["src", "dst"]).select(
-        F.col("src").cast("long").alias("src"),
-        F.col("dst").cast("long").alias("dst"),
-    )
-
-    logger.info(f"CCF DataFrame start | {len(edge_list):,} edges | algo={iterate_fn.__module__}")
-
-    for iteration in range(1, max_iterations + 1):
-        t0 = time.perf_counter()
-
-        iterated_df = iterate_fn(current_df).persist(StorageLevel.DISK_ONLY)
-        deduped_with_flags = (
-            iterated_df.groupBy("src", "dst")
-            .agg(F.max(F.col("is_new").cast("int")).alias("is_new_int"))
-            .persist(StorageLevel.DISK_ONLY)
-        )
-        metrics = deduped_with_flags.agg(
-            F.count(F.lit(1)).alias("pair_count"),
-            F.coalesce(F.sum("is_new_int"), F.lit(0)).alias("new_pairs"),
-        ).collect()[0]
-        pair_count = int(metrics["pair_count"])
-        new_pairs = int(metrics["new_pairs"])
-        deduped = deduped_with_flags.select("src", "dst").persist(StorageLevel.DISK_ONLY)
-        deduped.count()
-
-        logger.info(
-            f"Iter {iteration} | pairs={pair_count} | new={new_pairs} | {time.perf_counter()-t0}s"
-        )
-
-        iterated_df.unpersist()
-        deduped_with_flags.unpersist()
-
-        if new_pairs == 0:
-            logger.info(f"Converged after {iteration} iteration(s)")
-            current_df = deduped
-            break
-
-        if iteration > 1:
-            current_df.unpersist()
-        if iteration % CHECKPOINT_EVERY == 0:
-            current_df = deduped.localCheckpoint(eager=False).persist(StorageLevel.DISK_ONLY)
-            current_df.count()
-            deduped.unpersist()
-        else:
-            current_df = deduped
-    else:
-        logger.warning(f"Did not converge after {max_iterations} iterations")
-
-    component_map = _build_component_map_df(current_df)
-    current_df.unpersist()
-    return component_map
-'''
-
 def _build_component_map_df(pairs_df: DataFrame) -> dict:
     roots_df = pairs_df.select(
         F.col("dst").alias("src"),

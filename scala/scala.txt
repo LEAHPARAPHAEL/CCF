@@ -1,0 +1,385 @@
+import org.apache.spark.sql.{DataFrame, SparkSession, Row}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.expressions.Window
+import org.apache.spark.rdd.RDD
+import org.apache.spark.util.LongAccumulator
+import org.apache.spark.Partitioner
+import org.apache.spark.storage.StorageLevel
+import scala.concurrent.{Future, Await, ExecutionContext}
+import scala.concurrent.duration._
+import scala.util.{Success, Failure, Random}
+import java.io.{File, PrintWriter}
+import scala.io.Source
+
+import scala.concurrent.ExecutionContext.Implicits.global
+
+
+val CHECKPOINT_EVERY = 2
+val TIMEOUT_SECONDS = 600
+
+
+
+case class GraphDef(name: String, nodes: Int, edges: Int, comp: Int, filepath: String)
+
+def parseMetadata(file: File): GraphDef = {
+  if (file.getName.contains("web-Google")) {
+    return GraphDef("web_google", 875713, 5105039, 4336, file.getAbsolutePath)
+  }
+
+  var name = "unknown"
+  var nodes = 0
+  var edges = 0
+  var comp = -1
+
+  val source = Source.fromFile(file)
+  try {
+    for (line <- source.getLines().take(10) if line.startsWith("#")) {
+      val clean = line.stripPrefix("#").trim
+      val parts = clean.split(":")
+      if (parts.length == 2) {
+        val key = parts(0).trim
+        val value = parts(1).trim
+        key match {
+          case "group" => 
+          case "graph_type" => name = value
+          case "n_nodes" => nodes = value.toInt
+          case "n_edges" => edges = value.toInt
+          case "n_components" => comp = value.toInt
+          case _ => 
+        }
+      }
+    }
+  } finally {
+    source.close()
+  }
+
+  GraphDef(name, nodes, edges, comp, file.getAbsolutePath)
+}
+
+val dataDir = new File("data")
+val textFiles = if (dataDir.exists && dataDir.isDirectory) {
+  dataDir.listFiles.filter(_.getName.endsWith(".txt"))
+} else Array.empty[File]
+
+val graphs = textFiles.map(parseMetadata).toSeq
+
+
+def rdd_dedup(pairs: RDD[(Long, Long)]): RDD[(Long, Long)] = {
+  pairs.map(kv => (kv, 0.toByte)).reduceByKey((a, _) => a).map(_._1)
+}
+
+def rdd_v1_iterate(pairs: RDD[(Long, Long)], acc: LongAccumulator): RDD[(Long, Long)] = {
+  val symmetric = pairs.flatMap { case (u, v) => Seq((u, v), (v, u)) }
+  symmetric.groupByKey().flatMap { case (key, values) =>
+    val min_val = values.min
+    if (min_val >= key) Iterator.empty
+    else {
+      val out = scala.collection.mutable.ArrayBuffer[(Long, Long)]()
+      out += ((key, min_val))
+      for (v <- values) {
+        if (v != min_val) {
+          acc.add(1L)
+          out += ((v, min_val))
+        }
+      }
+      out.iterator
+    }
+  }
+}
+
+
+object CCFPartitioner extends Serializable {
+  class SrcPartitioner(partitions: Int) extends Partitioner {
+    def numPartitions: Int = partitions
+    def getPartition(key: Any): Int = {
+      val k = key.asInstanceOf[(Long, Long)]._1
+      (k.hashCode & Int.MaxValue) % numPartitions
+    }
+  }
+}
+
+
+def build_secondary_sorted_rdd(pairs: RDD[(Long, Long)]): RDD[((Long, Long), Byte)] = {
+  val n_parts = if (pairs.partitions.length > 0) pairs.partitions.length else 1
+  
+  val keyed = pairs.flatMap { case (u, v) => Seq(((u, v), 0.toByte), ((v, u), 0.toByte)) }
+  keyed.repartitionAndSortWithinPartitions(new CCFPartitioner.SrcPartitioner(n_parts))
+}
+
+def emit_from_secondary_sorted_rdd(sorted_rdd: RDD[((Long, Long), Byte)], acc: LongAccumulator): RDD[(Long, Long)] = {
+  sorted_rdd.mapPartitions { iterator =>
+    var current_key = -1L
+    var min_val = -1L
+    var should_emit = false
+
+    iterator.flatMap { case ((key, value), _) =>
+      if (key != current_key) {
+        current_key = key
+        min_val = value
+        should_emit = min_val < key
+        if (should_emit) Some((key, min_val)) else None
+      } else if (should_emit) {
+        acc.add(1L)
+        Some((value, min_val))
+      } else {
+        None
+      }
+    }
+  }
+}
+
+def rdd_v3_iterate(pairs: RDD[(Long, Long)], acc: LongAccumulator): RDD[(Long, Long)] = {
+  emit_from_secondary_sorted_rdd(build_secondary_sorted_rdd(pairs), acc)
+}
+
+
+def df_v1_iterate(pairs_df: DataFrame): DataFrame = {
+  val symmetric = pairs_df.select($"src", $"dst").unionByName(
+    pairs_df.select($"dst".as("src"), $"src".as("dst"))
+  )
+  val grouped = symmetric.groupBy("src").agg(collect_list("dst").alias("values"))
+    .withColumn("min_dst", array_min($"values"))
+    
+  val propagating = grouped.filter($"min_dst" < $"src")
+
+  val self_rows = propagating.select(
+    $"src", $"min_dst".alias("dst"), lit(0).alias("is_new")
+  )
+
+  val neighbour_rows = propagating.select($"min_dst", explode($"values").alias("neighbour"))
+    .filter($"neighbour" =!= $"min_dst")
+    .select($"neighbour".alias("src"), $"min_dst".alias("dst"), lit(1).alias("is_new"))
+
+  self_rows.unionByName(neighbour_rows)
+}
+
+
+def build_secondary_sorted_df(pairs_df: DataFrame): DataFrame = {
+  val symmetric = pairs_df.select($"src", $"dst").unionByName(
+    pairs_df.select($"dst".as("src"), $"src".as("dst"))
+  )
+  symmetric.repartition($"src").sortWithinPartitions("src", "dst")
+}
+
+def df_v3_iterate(pairs_df: DataFrame): DataFrame = {
+  val sorted_df = build_secondary_sorted_df(pairs_df)
+  val ordered = Window.partitionBy("src").orderBy("dst")
+
+  val annotated = sorted_df
+    .withColumn("row_num", row_number().over(ordered))
+    .withColumn("min_dst", first("dst").over(ordered))
+    .withColumn("should_emit", $"min_dst" < $"src")
+    .filter($"should_emit")
+
+  val self_rows = annotated.filter($"row_num" === 1).select(
+    $"src", $"min_dst".alias("dst"), lit(0).alias("is_new")
+  )
+
+  val neighbour_rows = annotated.filter($"row_num" > 1).select(
+    $"dst".alias("src"), $"min_dst".alias("dst"), lit(1).alias("is_new")
+  )
+
+  self_rows.unionByName(neighbour_rows)
+}
+
+
+
+
+def run_rdd_ccf(initial_rdd: RDD[(Long, Long)], iterate_fn: (RDD[(Long, Long)], LongAccumulator) => RDD[(Long, Long)]): (RDD[(Long, Long)], Double) = {
+  var current_rdd = initial_rdd
+  var total_time = 0.0
+
+  for (iteration <- 1 to 100) {
+    val t0 = System.nanoTime()
+    val acc = spark.sparkContext.longAccumulator("new_pairs")
+    val iterated = iterate_fn(current_rdd, acc)
+    val deduped = rdd_dedup(iterated).cache()
+    
+    val pair_count = deduped.count() 
+    val new_pairs = acc.value
+    total_time += (System.nanoTime() - t0) / 1e9
+
+    if (iteration > 1) current_rdd.unpersist()
+    current_rdd = deduped
+
+    if (new_pairs == 0) return (current_rdd, total_time)
+  }
+  (current_rdd, total_time)
+}
+
+def run_df_ccf(initial_df: DataFrame, iterate_fn: DataFrame => DataFrame): (DataFrame, Double) = {
+  var current_df = initial_df 
+  var total_time = 0.0
+
+
+  var prev_persisted_df: DataFrame = null
+
+  for (iteration <- 1 to 100) {
+    val t0 = System.nanoTime()
+
+    val deduped_with_flags = iterate_fn(current_df)
+      .groupBy("src", "dst")
+      .agg(max($"is_new".cast("int")).alias("is_new_int"))
+      .persist(StorageLevel.DISK_ONLY)
+
+    val metrics = deduped_with_flags.agg(
+      count(lit(1)).alias("pair_count"),
+      coalesce(sum("is_new_int"), lit(0)).alias("new_pairs")
+    ).collect()(0)
+
+    val pair_count = metrics.getAs[Long]("pair_count")
+    val new_pairs = metrics.getAs[Long]("new_pairs")
+
+    val loop_time = (System.nanoTime() - t0) / 1e9
+    total_time += loop_time
+
+    if (prev_persisted_df != null) {
+      prev_persisted_df.unpersist()
+    }
+
+    if (new_pairs == 0) {
+      current_df = deduped_with_flags.select("src", "dst")
+      if (prev_persisted_df != null) prev_persisted_df.unpersist()
+      return (current_df, total_time)
+    }
+
+    if (iteration % CHECKPOINT_EVERY == 0) {
+      current_df = deduped_with_flags.select("src", "dst").localCheckpoint(eager = true)
+      
+      deduped_with_flags.unpersist()
+      prev_persisted_df = current_df
+    } else {
+      current_df = deduped_with_flags.select("src", "dst")
+      prev_persisted_df = deduped_with_flags
+    }
+  }
+
+  if (prev_persisted_df != null) prev_persisted_df.unpersist()
+  (current_df, total_time)
+}
+
+def run_rdd_v3_no_build(initial_rdd: RDD[(Long, Long)]): (RDD[(Long, Long)], Double) = {
+  var current_rdd = initial_rdd
+  var total_compute_time = 0.0
+
+  for (iteration <- 1 to 10000) {
+    val sorted = build_secondary_sorted_rdd(current_rdd).cache()
+    sorted.count() 
+
+    val t0 = System.nanoTime()
+    val acc = spark.sparkContext.longAccumulator("new_pairs")
+    val emitted = emit_from_secondary_sorted_rdd(sorted, acc)
+    val deduped = rdd_dedup(emitted).cache()
+    
+    val pair_count = deduped.count()
+    val new_pairs = acc.value
+    total_compute_time += (System.nanoTime() - t0) / 1e9
+
+    sorted.unpersist()
+    if (iteration > 1) current_rdd.unpersist()
+    current_rdd = deduped
+
+    if (new_pairs == 0) return (current_rdd, total_compute_time)
+  }
+  (current_rdd, total_compute_time)
+}
+
+case class AlgoDef(name: String, func: DataFrame => Double)
+
+
+val algos = Seq(
+  AlgoDef("rdd_v1", df => run_rdd_ccf(df.as[(Long, Long)].rdd, rdd_v1_iterate)._2),
+  AlgoDef("rdd_v2", df => run_rdd_ccf(df.as[(Long, Long)].rdd, rdd_v3_iterate)._2),
+  AlgoDef("df_v1", df => run_df_ccf(df, df_v1_iterate)._2),
+  AlgoDef("df_v3", df => run_df_ccf(df, df_v3_iterate)._2),
+  AlgoDef("rdd_v3", df => run_rdd_v3_no_build(df.as[(Long, Long)].rdd)._2)
+)
+
+val csvFile = new File("results/csv/benchmark_scala.csv")
+val writer = new PrintWriter(csvFile)
+val header = "algo,graph_type,n_nodes,n_edges,n_components,median_time_s,mean_time_s,stdev_time_s,successful_runs,timeout_runs,n_runs,timed_out,error"
+
+writer.println(header)
+println(s"Writing results to ${csvFile.getAbsolutePath}")
+println(header)
+
+val RUNS = 3
+
+for (gDef <- graphs) {
+  println(s"Loading graph: ${gDef.name} from ${gDef.filepath}")
+  
+  val graphDF = try {
+    val df = spark.read.text(gDef.filepath).as[String]
+      .filter(line => !line.startsWith("#") && line.trim.nonEmpty)
+      .map { line => 
+        val parts = line.trim.split("\\s+")
+        (parts(0).toLong, parts(1).toLong)
+      }.toDF("src", "dst").cache()
+      
+    df.count() 
+    df
+  } catch {
+    case e: Throwable => 
+      println(s"CRITICAL: Failed to load graph ${gDef.name}: ${e.getMessage}")
+      spark.emptyDataFrame
+  }
+  
+  if (!graphDF.isEmpty) {
+    for (algo <- algos) {
+      var times = Seq[Double]()
+      var timeouts = 0
+      var errors = 0
+      
+      for (runId <- 1 to RUNS) {
+        val groupId = s"${gDef.name}-${algo.name}-run$runId"
+        
+        val future = Future {
+          spark.sparkContext.setJobGroup(groupId, s"Benchmark: ${algo.name} on ${gDef.name}", interruptOnCancel = true)
+          
+          val result = algo.func(graphDF)
+
+          spark.sparkContext.clearJobGroup() 
+          result
+        }
+        
+        try {
+          val t = Await.result(future, TIMEOUT_SECONDS.seconds)
+          times = times :+ t
+        } catch {
+          case _: java.util.concurrent.TimeoutException => 
+            timeouts += 1
+            println(s"--> TIMEOUT: ${algo.name} took over $TIMEOUT_SECONDS s. Cancelling Spark jobs...")
+            spark.sparkContext.cancelJobGroup(groupId) 
+            
+          case e: Throwable => 
+            errors += 1
+            println(s"--> ERROR on ${algo.name}: ${e.getClass.getSimpleName}")
+            spark.sparkContext.cancelJobGroup(groupId)
+            System.gc() 
+        }
+      }
+      
+      val success = times.length
+      val isTimeout = if (timeouts > 0) 1 else 0
+      val hasError = if (errors > 0) 1 else 0
+      
+      val (median, mean, stdev) = if (success > 0) {
+        val sorted = times.sorted
+        val med = if (success % 2 == 0) (sorted(success/2 - 1) + sorted(success/2)) / 2.0 else sorted(success/2)
+        val mn = times.sum / success
+        val variance = times.map(t => math.pow(t - mn, 2)).sum / success
+        (med, mn, math.sqrt(variance))
+      } else (0.0, 0.0, 0.0)
+
+      val row = f"${algo.name},${gDef.name},${gDef.nodes},${gDef.edges},${gDef.comp},$median%.6f,$mean%.6f,$stdev%.6f,$success,$timeouts,$RUNS,$isTimeout,$hasError"
+      
+      writer.println(row)
+      writer.flush()
+      println(row)
+    }
+    graphDF.unpersist() 
+  }
+}
+
+writer.close()
+println("Benchmark complete. CSV file successfully saved.")

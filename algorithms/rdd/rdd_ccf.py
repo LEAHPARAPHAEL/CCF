@@ -3,11 +3,11 @@ import time
 
 from pyspark.sql import SparkSession
 
-from .dedup import dedup
+from algorithms.rdd.rdd_dedup import dedup
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from pyspark import RDD
-from algorithms.rdd.v3 import build_secondary_sorted_rdd, emit_from_secondary_sorted_rdd
+from algorithms.rdd.rdd_v3 import build_secondary_sorted_rdd, emit_from_secondary_sorted_rdd
 from pyspark import StorageLevel
 
 
@@ -32,7 +32,7 @@ def run_ccf_rdd(spark: SparkSession, current_rdd: RDD, iterate_fn, max_iteration
         #pair_count = deduped.count()
         new_pairs = new_pair_acc.value
         
-        loop_time = time.perf_counter() 
+        loop_time = time.perf_counter() - t0 
         total_time += loop_time
 
         previous_rdd = current_rdd
