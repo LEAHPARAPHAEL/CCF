@@ -1,12 +1,14 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+import os
 
-df_py = pd.read_csv('benchmark_pyspark.csv')
-df_sc = pd.read_csv('benchmark_scala.csv')
+py_path = os.path.join("results", "csv", "benchmark_pyspark.csv")
+sc_path = os.path.join("results", "csv", "benchmark_scala.csv")
+
+df_py = pd.read_csv(py_path)
+df_sc = pd.read_csv(sc_path)
 
 graph_types = pd.concat([df_py['graph_type'], df_sc['graph_type']]).unique()
-
-
 print("Generating plots...")
 for g_type in graph_types:
     plt.figure(figsize=(8, 5))
@@ -20,13 +22,19 @@ for g_type in graph_types:
         subset_algo_py = subset_g_py[subset_g_py['algo'] == algo]
         subset_algo_sc = subset_g_sc[subset_g_sc['algo'] == algo]
         
+        algo_color = None
         if not subset_algo_sc.empty:
-            plt.plot(subset_algo_sc['n_nodes'], subset_algo_sc['mean_time_s'], 
-                     marker='o', linestyle='-', label=f'{algo} (Scala)')
+            line = plt.plot(subset_algo_sc['n_nodes'], subset_algo_sc['mean_time_s'], 
+                            marker='o', linestyle='-', label=f'{algo} (Scala)')
+            algo_color = line[0].get_color()
             
         if not subset_algo_py.empty:
-            plt.plot(subset_algo_py['n_nodes'], subset_algo_py['mean_time_s'], 
-                     marker='X', linestyle='--', label=f'{algo} (PySpark)')
+            if algo_color:
+                plt.plot(subset_algo_py['n_nodes'], subset_algo_py['mean_time_s'], 
+                         marker='X', linestyle='--', color=algo_color, label=f'{algo} (PySpark)')
+            else:
+                plt.plot(subset_algo_py['n_nodes'], subset_algo_py['mean_time_s'], 
+                         marker='X', linestyle='--', label=f'{algo} (PySpark)')
     
     plt.title(f'Algorithm Performance on {g_type.replace("_", " ").title()} Graphs')
     plt.xlabel('Number of Nodes ($n$)')
@@ -36,7 +44,7 @@ for g_type in graph_types:
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.tight_layout()
     
-    filename = f"{g_type}_comparison.png"
+    filename = os.path.join("results", "plots", f"{g_type}_comparison.png")
     plt.savefig(filename)
     plt.close()
     print(f" -> Saved {filename}")

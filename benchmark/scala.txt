@@ -20,15 +20,14 @@ val TIMEOUT_SECONDS = 600
 
 
 
-case class GraphDef(group: String, name: String, nodes: Int, edges: Int, comp: Int, filepath: String)
+case class GraphDef(name: String, nodes: Int, edges: Int, comp: Int, filepath: String)
 
 def parseMetadata(file: File): GraphDef = {
   if (file.getName.contains("web-Google")) {
     return GraphDef("web_google", 875713, 5105039, 4336, file.getAbsolutePath)
   }
 
-  var group = "main"
-  var gtype = "unknown"
+  var name = "unknown"
   var nodes = 0
   var edges = 0
   var comp = -1
@@ -43,8 +42,8 @@ def parseMetadata(file: File): GraphDef = {
         val key = parts(0).trim
         val value = parts(1).trim
         key match {
-          case "group" => group = value
-          case "graph_type" => gtype = value
+          case "group" => 
+          case "graph_type" => name = value
           case "n_nodes" => nodes = value.toInt
           case "n_edges" => edges = value.toInt
           case "n_components" => comp = value.toInt
@@ -56,7 +55,7 @@ def parseMetadata(file: File): GraphDef = {
     source.close()
   }
 
-  GraphDef(gtype, nodes, edges, comp, file.getAbsolutePath)
+  GraphDef(name, nodes, edges, comp, file.getAbsolutePath)
 }
 
 // 1. Scan directory and build definitions
@@ -324,9 +323,9 @@ val algos = Seq(
   AlgoDef("rdd_v3", df => run_rdd_v3_no_build(df.as[(Long, Long)].rdd)._2)
 )
 
-val csvFile = new File("results/csv/benchmark_scala.csv")
+val csvFile = new File("benchmark_results_scala.csv")
 val writer = new PrintWriter(csvFile)
-val header = "group_name,algo,graph_type,n_nodes,n_edges,n_components,median_time_s,mean_time_s,stdev_time_s,successful_runs,timeout_runs,n_runs,timed_out,error"
+val header = "algo,graph_type,n_nodes,n_edges,n_components,median_time_s,mean_time_s,stdev_time_s,successful_runs,timeout_runs,n_runs,timed_out,error"
 
 writer.println(header)
 println(s"Writing results to ${csvFile.getAbsolutePath}")
