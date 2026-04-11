@@ -13,10 +13,7 @@ CHECKPOINT_EVERY = 2
 
 
 def run_ccf_df(spark: SparkSession, current_df: DataFrame, iterate_fn, max_iterations: int = 100) -> dict:
-    """
-    Optimized CCF Runner. 
-    Note: current_df should be passed in as a DataFrame, not a local Python list!
-    """
+
     prev_persisted_df = None
 
     total_time = 0.0 

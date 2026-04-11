@@ -1,4 +1,15 @@
 data_path: "diameter"
+output_path: "benchmark_diameter.csv"
+timeout: 100
+n_runs: 3
+
+algos: [
+  rdd_v1,
+  rdd_v3,
+  rdd_v3_exec,
+  df_v1,
+  df_v3
+]
 
 graphs:
   fixed_diameter:

@@ -239,13 +239,8 @@ def fetch_web_google_graph(folder="data"):
     os.remove(gz_path)
 
 
-# --- Dispatcher ---
-
-def generate_from_config(config_path):
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-
-    folder = os.path.join("data", config.get("data_path", "bench_cases"))
+def generate(config):
+    folder = os.path.join("data", config.get("data_path", "data_example"))
     graphs_config = config.get("graphs", {})
 
     print(f"Generating benchmark graphs into: {folder} ...\n")
@@ -298,6 +293,13 @@ def generate_from_config(config_path):
                 save_graph(filepath, gtype, n, len(edges), 1, edges, diameter=kwargs["d"])
             else:
                 print(f"Warning: Unknown graph type '{gtype}'")
+
+def generate_from_config(config_path):
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    generate(config)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Graph Generator Pipeline")

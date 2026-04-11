@@ -14,10 +14,10 @@ from algorithms.df.df_ccf import run_ccf_df
 from algorithms.df import df_v1, df_v3
 import argparse
 from utils.spark_builder import build_spark
-import utils.generate_graphs as gg
+from utils.generate_graphs import generate
 import os
-
 import glob
+import yaml  
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -32,7 +32,6 @@ class GraphDef:
         self.filepath = filepath
 
 def parse_metadata(filepath: str) -> GraphDef:
-    # --- ADDED: default diameter key ---
     meta = {"graph_type": "unknown", "n_nodes": 0, "n_edges": 0, "n_components": -1, "diameter": -1}
 
     if "web_google" in filepath:
@@ -92,26 +91,33 @@ def execute_with_timeout(spark, job_group_id, func, *args, timeout_sec=100):
             spark.sparkContext.cancelJobGroup(job_group_id)
             raise
 
-def run_benchmark(args):
+def run_benchmark(config_path):
 
-    data_path = os.path.join("data", args.data)
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    data_path = os.path.join("data", config.get("data_path", "data_example"))
+    CSV_FILE = os.path.join("results", "csv", config.get("output_path", "benchmark_example.csv"))
+    algos = config.get("algos", ["rdd_v1", "rdd_v3", "rdd_v3_exec", "df_v1", "df_v3"])
+    RUNS = config.get("n_runs", 3)
+    TIMEOUT_SECONDS = config.get("timeout", 600)
+
+    os.makedirs(os.path.dirname(CSV_FILE) or ".", exist_ok=True)
+
+    generate(config)
+
     spark = build_spark()
-
     sc = spark.sparkContext
-    
-    RUNS = 3
-    TIMEOUT_SECONDS = 600
-    CSV_FILE = os.path.join("results", "csv", args.output)
     
     data_files = glob.glob(f"{data_path}/*.txt")
     graphs = [parse_metadata(f) for f in data_files]
-    algos = ["rdd_v1", "rdd_v3", "rdd_v3_exec", "df_v1", "df_v3"] 
 
     headers = [
         "algo", "graph_type", "n_nodes", "n_edges", "n_components", "diameter",
         "median_time_s", "mean_time_s", "stdev_time_s", "iterations",
         "successful_runs", "timeout_runs", "n_runs", "timed_out", "error"
     ]
+
 
     with open(CSV_FILE, mode='w', newline='') as f:
         writer = csv.writer(f)
@@ -125,6 +131,10 @@ def run_benchmark(args):
             df.count()
 
             for algo_name in algos:
+                if algo_name not in ALGORITHMS:
+                    logger.warning(f"Skipping unknown algorithm: {algo_name}")
+                    continue
+
                 times = []
                 iters_list = [] 
                 timeouts = 0
@@ -163,12 +173,10 @@ def run_benchmark(args):
                     med = statistics.median(times)
                     mn = statistics.mean(times)
                     stdev = statistics.stdev(times) if success > 1 else 0.0
-                    # Algorithms are deterministic, grab the iteration count from the first successful run
                     final_iters = int(iters_list[0]) 
                 else:
                     med, mn, stdev, final_iters = 0.0, 0.0, 0.0, -1
 
-                # --- ADDED: diameter and final_iters variables ---
                 row = [
                     algo_name, gDef.name, gDef.nodes, gDef.edges, gDef.comp, gDef.diameter,
                     f"{med:.6f}", f"{mn:.6f}", f"{stdev:.6f}", final_iters,
@@ -184,10 +192,12 @@ def run_benchmark(args):
     logger.info("Benchmark complete. CSV file successfully saved.")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description = "Benchmark for our different CCF implementations")
-    parser.add_argument("--data", "-d", type = str, default = "topologies",
-                        help = "Path to the data folder.")
-    parser.add_argument("--output", "-o", type = str, default = "benchmark_pyspark.csv",
-                        help = "Path to the output csv file.")
+    parser = argparse.ArgumentParser(description="Benchmark for our different CCF implementations")
+    parser.add_argument("--config", "-c", type=str, default="bench_example.yaml",
+                        help="Path to the YAML configuration file.")
     args = parser.parse_args()
-    run_benchmark(args)
+    config_path = os.path.join("configs", args.config)
+    if not os.path.exists(config_path):
+        logger.error(f"Configuration file not found: {config_path}")
+    else:
+        run_benchmark(config_path)

@@ -1,4 +1,15 @@
-data_path: "topologies"
+data_path: "data_example"
+output_path: "benchmark_example.csv"
+timeout: 100
+n_runs: 3
+
+algos: [
+  rdd_v1,
+  rdd_v3,
+  rdd_v3_exec,
+  df_v1,
+  df_v3
+]
 
 graphs:
   star:
