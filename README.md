@@ -41,23 +41,22 @@ For example, let's analyze the configuration file below. It creates and stores g
 data path : data_example
 output_path : benchmark_example.csv
 
-algos: [
-    rdd_v1,
-    rdd_v3,
-    rdd_v3_exec,
-    df_v1,
-    df_v3
-]
+    algos: [
+        rdd_v1,
+        rdd_v3,
+        rdd_v3_exec,
+        df_v1,
+        df_v3
+    ]
 
-graphs : [
-    chain:
-        n: [10, 100, 1000]
+    graphs : 
+        chain:
+            n: [10, 100, 1000]
 
-    multi_comp:
-        n: [100000, 500000, 1000000]
-        k: [10, 10, 10]
-        m: [500000, 2500000, 5000000]
-]
+        multi_comp:
+            n: [100000, 500000, 1000000]
+            k: [10, 10, 10]
+            m: [500000, 2500000, 5000000]
 
 
 # PySpark
