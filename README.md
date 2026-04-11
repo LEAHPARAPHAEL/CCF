@@ -38,8 +38,8 @@ For example, let's analyze the configuration file below. It creates and stores g
 
 # Configuration file example : configs/bench_example.yaml
 
-data path : data_example
-output_path : benchmark_example.csv
+    data path : data_example
+    output_path : benchmark_example.csv
 
     algos: [
         rdd_v1,
