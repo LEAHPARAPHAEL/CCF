@@ -31,7 +31,7 @@ def run_ccf_rdd(spark: SparkSession, current_rdd: RDD, iterate_fn, max_iteration
         if iteration % 10 == 0:
             deduped.localCheckpoint()
 
-        #pair_count = deduped.count()
+        pair_count = deduped.count()
         new_pairs = new_pair_acc.value
         
         loop_time = time.perf_counter() - t0 
@@ -78,7 +78,7 @@ def run_ccf_v3_no_build(spark: SparkSession, current_rdd: RDD, max_iterations: i
         if iteration % 10 == 0:
             deduped.localCheckpoint()
 
-        #pair_count = deduped.count()
+        pair_count = deduped.count()
         new_pairs = new_pair_acc.value
         
         loop_time = time.perf_counter() - t0
